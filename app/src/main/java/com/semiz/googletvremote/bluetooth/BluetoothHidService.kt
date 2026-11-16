@@ -7,7 +7,11 @@ import android.bluetooth.BluetoothHidDevice
 import android.bluetooth.BluetoothHidDeviceAppQosSettings
 import android.bluetooth.BluetoothHidDeviceAppSdpSettings
 import android.bluetooth.BluetoothProfile
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.provider.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -20,14 +24,22 @@ import java.util.concurrent.Executors
 class BluetoothHidService(private val context: Context) {
 
     private var hidDevice: BluetoothHidDevice? = null
-    private var connectedTv: BluetoothDevice? = null
     private val scope = CoroutineScope(Dispatchers.IO)
 
-    private val _connectionStatus = MutableStateFlow("Esperando conexión Bluetooth HID...")
+    private val _connectionStatus = MutableStateFlow("Desconectado · Tocá 'Conectar Bluetooth'")
     val connectionStatus: StateFlow<String> = _connectionStatus
+
+    private val _connectedDevice = MutableStateFlow<BluetoothDevice?>(null)
+    val connectedDevice: StateFlow<BluetoothDevice?> = _connectedDevice
 
     private val _pairedDevices = MutableStateFlow<List<BluetoothDevice>>(emptyList())
     val pairedDevices: StateFlow<List<BluetoothDevice>> = _pairedDevices
+
+    private val _discoveredDevices = MutableStateFlow<List<BluetoothDevice>>(emptyList())
+    val discoveredDevices: StateFlow<List<BluetoothDevice>> = _discoveredDevices
+
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning
 
     // Descriptor HID combinado: Report ID 2 (Consumer Control) + Report ID 1 (Keyboard)
     private val HID_REPORT_DESC = byteArrayOf(
@@ -69,12 +81,48 @@ class BluetoothHidService(private val context: Context) {
         0xC0.toByte()
     )
 
+    private val btReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
+            when (intent?.action) {
+                BluetoothDevice.ACTION_FOUND -> {
+                    val dev: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    if (dev != null && !dev.name.isNullOrBlank()) {
+                        val current = _discoveredDevices.value
+                        if (current.none { it.address == dev.address }) {
+                            _discoveredDevices.value = current + dev
+                        }
+                    }
+                }
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
+                    _isScanning.value = false
+                }
+                BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
+                    val dev: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    val bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)
+                    if (bondState == BluetoothDevice.BOND_BONDED && dev != null) {
+                        refreshPairedDevices()
+                        connectToTv(dev)
+                    }
+                }
+            }
+        }
+    }
+
     fun initialize() {
         val adapter = BluetoothAdapter.getDefaultAdapter()
         if (adapter == null || !adapter.isEnabled) {
-            _connectionStatus.value = "Activá el Bluetooth del celular"
+            _connectionStatus.value = "Bluetooth apagado · Tocá para activar"
             return
         }
+        try {
+            val filter = IntentFilter().apply {
+                addAction(BluetoothDevice.ACTION_FOUND)
+                addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+                addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+            }
+            context.registerReceiver(btReceiver, filter)
+        } catch (_: Exception) {}
+
         refreshPairedDevices()
         adapter.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
             override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
@@ -85,6 +133,7 @@ class BluetoothHidService(private val context: Context) {
             }
             override fun onServiceDisconnected(profile: Int) {
                 hidDevice = null
+                _connectedDevice.value = null
                 _connectionStatus.value = "Servicio Bluetooth HID desconectado"
             }
         }, BluetoothProfile.HID_DEVICE)
@@ -93,6 +142,33 @@ class BluetoothHidService(private val context: Context) {
     fun refreshPairedDevices() {
         val adapter = BluetoothAdapter.getDefaultAdapter() ?: return
         _pairedDevices.value = adapter.bondedDevices?.toList() ?: emptyList()
+    }
+
+    fun startDiscoveryScan() {
+        val adapter = BluetoothAdapter.getDefaultAdapter() ?: return
+        refreshPairedDevices()
+        _discoveredDevices.value = emptyList()
+        if (adapter.isDiscovering) adapter.cancelDiscovery()
+        _isScanning.value = true
+        adapter.startDiscovery()
+    }
+
+    fun pairOrConnectDevice(device: BluetoothDevice) {
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+        if (adapter?.isDiscovering == true) adapter.cancelDiscovery()
+        if (device.bondState != BluetoothDevice.BOND_BONDED) {
+            _connectionStatus.value = "Vinculando con ${device.name ?: device.address}..."
+            device.createBond()
+        } else {
+            connectToTv(device)
+        }
+    }
+
+    fun openSystemBluetoothSettings() {
+        val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
     }
 
     private fun registerHidApp() {
@@ -110,17 +186,25 @@ class BluetoothHidService(private val context: Context) {
         hidDevice?.registerApp(sdp, null, qos, Executors.newCachedThreadPool(), object : BluetoothHidDevice.Callback() {
             override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
                 if (registered) {
-                    _connectionStatus.value = "HID Listo · Tocá un TV vinculado para conectar"
+                    _connectionStatus.value = "HID Listo · Elegí tu Google TV en 'Conectar Bluetooth'"
                     pluggedDevice?.let { connectToTv(it) }
                 }
             }
             override fun onConnectionStateChanged(device: BluetoothDevice, state: Int) {
-                if (state == BluetoothProfile.STATE_CONNECTED) {
-                    connectedTv = device
-                    _connectionStatus.value = "Conectado a ${device.name ?: device.address}"
-                } else if (state == BluetoothProfile.STATE_DISCONNECTED) {
-                    if (connectedTv?.address == device.address) connectedTv = null
-                    _connectionStatus.value = "Desconectado de ${device.name ?: device.address}"
+                when (state) {
+                    BluetoothProfile.STATE_CONNECTED -> {
+                        _connectedDevice.value = device
+                        _connectionStatus.value = "Conectado por BT a ${device.name ?: device.address}"
+                    }
+                    BluetoothProfile.STATE_CONNECTING -> {
+                        _connectionStatus.value = "Conectando a ${device.name ?: device.address}..."
+                    }
+                    BluetoothProfile.STATE_DISCONNECTED -> {
+                        if (_connectedDevice.value?.address == device.address) {
+                            _connectedDevice.value = null
+                        }
+                        _connectionStatus.value = "Desconectado de ${device.name ?: device.address}"
+                    }
                 }
             }
         })
@@ -131,39 +215,51 @@ class BluetoothHidService(private val context: Context) {
         _connectionStatus.value = "Conectando con ${device.name ?: device.address}..."
     }
 
+    fun disconnectCurrentTv() {
+        val tv = _connectedDevice.value ?: return
+        hidDevice?.disconnect(tv)
+        _connectedDevice.value = null
+        _connectionStatus.value = "Desconectado"
+    }
+
     fun sendConsumerUsage(usageCode: Int) {
-        val tv = connectedTv ?: return
+        val tv = _connectedDevice.value ?: return
         val lowByte = (usageCode and 0xFF).toByte()
         val highByte = ((usageCode shr 8) and 0xFF).toByte()
         hidDevice?.sendReport(tv, 2, byteArrayOf(lowByte, highByte))
         hidDevice?.sendReport(tv, 2, byteArrayOf(0x00, 0x00))
     }
 
-    fun launchAppViaBluetoothMacro(appName: String) {
+    /**
+     * Navegación por Grillado de Home de Google TV (SIN activar el micrófono de Google Assistant):
+     * 1. Envía AC Home (0x0223) para ir al inicio.
+     * 2. Baja a la fila de 'Tus aplicaciones' y se desplaza hasta la posición (gridIndex) configurada.
+     * 3. Envía Enter (0x0041) para abrir la app directamente.
+     */
+    fun launchAppViaHomeGridSlot(slotIndex: Int) {
         scope.launch {
-            sendConsumerUsage(0x0221) // AC Search en Google TV
-            delay(320)
-            for (ch in appName.lowercase()) {
-                val hidKey = charToHidKeyCode(ch)
-                if (hidKey != 0.toByte()) {
-                    sendKeyboardKey(hidKey)
-                    delay(45)
-                }
+            // 1. Ir al Home de Google TV
+            sendConsumerUsage(0x0223)
+            delay(650)
+            // 2. Bajar a la fila de aplicaciones favoritas
+            sendConsumerUsage(0x0043) // DPAD_DOWN
+            delay(260)
+            sendConsumerUsage(0x0043) // DPAD_DOWN (fila Tus Apps en Google TV)
+            delay(260)
+            // Ir al primer ícono a la izquierda para tener referencia fija
+            repeat(8) {
+                sendConsumerUsage(0x0044) // DPAD_LEFT
+                delay(70)
             }
-            delay(200)
-            sendKeyboardKey(0x28) // Enter
+            delay(150)
+            // Mover a la derecha según el número de casillero (0 = primera app, 1 = segunda, etc.)
+            repeat(slotIndex.coerceAtLeast(0)) {
+                sendConsumerUsage(0x0045) // DPAD_RIGHT
+                delay(140)
+            }
+            delay(180)
+            // 3. Abrir la aplicación (OK / Menu Pick)
+            sendConsumerUsage(0x0041)
         }
-    }
-
-    private fun sendKeyboardKey(keyCode: Byte) {
-        val tv = connectedTv ?: return
-        hidDevice?.sendReport(tv, 1, byteArrayOf(0, 0, keyCode, 0, 0, 0, 0, 0))
-        hidDevice?.sendReport(tv, 1, ByteArray(8))
-    }
-
-    private fun charToHidKeyCode(c: Char): Byte = when (c) {
-        in 'a'..'z' -> (c - 'a' + 4).toByte()
-        ' ' -> 0x2C.toByte()
-        else -> 0x00.toByte()
     }
 }

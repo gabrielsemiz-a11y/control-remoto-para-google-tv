@@ -11,8 +11,8 @@ android {
         applicationId = "com.semiz.googletvremote"
         minSdk = 28 // Android 9+ requerido para BluetoothHidDevice
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "2.0.0"
     }
 
     buildTypes {
@@ -37,6 +37,11 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
 }
 
 dependencies {
@@ -47,4 +52,6 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // Cliente ADB criptográfico real (Dadb) para lanzar cualquier APK sin usar el asistente de voz
+    implementation("dev.mobile:dadb:1.2.10")
 }
