@@ -36,9 +36,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,11 +49,6 @@ import com.semiz.googletvremote.launcher.TvAppShortcut
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/**
- * Motor de Retrorespuesta Sensorial (Sonido Click + Vibración Háptica)
- * Usa ToneGenerator sobre STREAM_MUSIC para que el click se escuche siempre
- * incluso si el teléfono tiene desactivados los sonidos de toque del sistema.
- */
 class TactileFeedbackManager(private val context: Context) {
     private var toneGen: ToneGenerator? = try {
         ToneGenerator(AudioManager.STREAM_MUSIC, 85)
@@ -64,7 +59,6 @@ class TactileFeedbackManager(private val context: Context) {
     var soundEnabled: Boolean = true
 
     fun triggerClick(isAppLaunch: Boolean = false) {
-        // 1. Sonido de click acústico inmediato
         if (soundEnabled) {
             try {
                 val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -75,7 +69,6 @@ class TactileFeedbackManager(private val context: Context) {
             } catch (_: Exception) {}
         }
 
-        // 2. Pulso de vibración táctil nítido
         try {
             val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
@@ -96,16 +89,13 @@ class TactileFeedbackManager(private val context: Context) {
     }
 }
 
-/**
- * Botón con Iluminación Reactiva (Glow Cyan/Blanco + Escala + Sonido Click + Vibración)
- */
 @Composable
 fun GlowingRemoteButton(
     text: String,
     baseColor: Color,
     glowColor: Color = Color(0xFF38BDF8),
     modifier: Modifier = Modifier,
-    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp),
+    shape: Shape = RoundedCornerShape(12.dp),
     fontSize: TextUnit = 13.sp,
     feedback: TactileFeedbackManager,
     isAppLaunch: Boolean = false,
@@ -139,7 +129,7 @@ fun GlowingRemoteButton(
         modifier = modifier
             .scale(scale)
             .background(bgColor, shape)
-            .border(if (activeHighlight) 2.5.dp else 1.dp, borderColor, shape)
+            .border(if (activeHighlight) 2.dp else 1.dp, borderColor, shape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null
@@ -189,7 +179,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         btService = BluetoothHidService(this)
-        launcherEngine = TvAppLauncherEngine(this, btService)
+        launcherEngine = TvAppLauncherEngine(btService)
         feedbackManager = TactileFeedbackManager(this)
 
         requestBluetoothPermissionsIfNeeded()
@@ -242,15 +232,12 @@ fun GoogleTvRemoteScreen(
     var tvIp by remember { mutableStateOf(prefs.getString("tv_ip", "") ?: "") }
     var soundOn by remember { mutableStateOf(true) }
 
-    // Diálogos
     var showBtModal by remember { mutableStateOf(false) }
     var showAddAppModal by remember { mutableStateOf(false) }
-    var showScanPackagesModal by remember { mutableStateOf(false) }
-    var scannedPackages by remember { mutableStateOf<List<String>>(emptyList()) }
 
     var newAppName by remember { mutableStateOf("") }
     var newAppPkg by remember { mutableStateOf("") }
-    var newAppSlot by remember { mutableStateOf("1") }
+    var newAppSlot by remember { mutableStateOf("7") }
     var actionFeedback by remember { mutableStateOf("Listo · Cada botón ilumina y emite click sonoro/vibración") }
 
     Column(
@@ -267,7 +254,7 @@ fun GoogleTvRemoteScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("GOOGLE TV REMOTE PRO v2.1", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Black)
+                Text("GOOGLE TV REMOTE PRO v3", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Black)
                 Text(btStatus, color = if (connectedDevice != null) Color(0xFF34D399) else Color(0xFF38BDF8), fontSize = 11.sp)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -330,14 +317,14 @@ fun GoogleTvRemoteScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // SECCIÓN 1: GRILLA PERSONALIZADA DE APPS EN 1 TOQUE CON ILUMINACIÓN Y CLICK SONORO
+        // SECCIÓN 1: GRILLA PERSONALIZADA DE APPS EN 1 TOQUE (SIN ACTIVAR ASISTENTE DE VOZ)
         Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = if (tvIp.isNotBlank()) "⚡ TUS APPS (LANZAMIENTO DIRECTO ADB: $tvIp)" else "⚡ TUS APPS (1 TOQUE · ILUMINACIÓN + CLICK ACTIVO)",
+                text = if (tvIp.isNotBlank()) "⚡ TUS APPS (DIRECTO IP: $tvIp)" else "⚡ TUS APPS (1 TOQUE · SIN ASISTENTE DE VOZ)",
                 color = Color(0xFFFBBF24),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.ExtraBold
@@ -353,9 +340,9 @@ fun GoogleTvRemoteScreen(
             items(apps.filter { it.pinned }) { app ->
                 GlowingRemoteButton(
                     text = app.name,
-                    subtitle = if (tvIp.isNotBlank()) "Directo" else "Slot #${app.homeSlotIndex + 1}",
+                    subtitle = if (tvIp.isNotBlank()) "Directo" else "Casillero #${app.homeSlotIndex + 1}",
                     baseColor = Color(app.colorHex),
-                    glowColor = Color(0xFFFDE047), // Destello dorado brillante al tocar una App
+                    glowColor = Color(0xFFFDE047),
                     shape = RoundedCornerShape(14.dp),
                     fontSize = 13.sp,
                     feedback = feedback,
@@ -382,7 +369,7 @@ fun GoogleTvRemoteScreen(
             modifier = Modifier.padding(vertical = 6.dp)
         )
 
-        // SECCIÓN 2: CRUCETA D-PAD BLUETOOTH HID CON RETROILUMINACIÓN EN CADA DIRECCIÓN
+        // SECCIÓN 2: CRUCETA D-PAD BLUETOOTH HID CON RETROILUMINACIÓN
         Box(
             modifier = Modifier
                 .size(206.dp)
@@ -390,7 +377,6 @@ fun GoogleTvRemoteScreen(
                 .border(2.dp, Color(0xFF334155), CircleShape),
             contentAlignment = Alignment.Center
         ) {
-            // Arriba
             GlowingRemoteButton(
                 text = "▲",
                 baseColor = Color(0xFF1E293B),
@@ -403,7 +389,6 @@ fun GoogleTvRemoteScreen(
                 btService.sendConsumerUsage(0x0042)
                 actionFeedback = "▲ D-Pad Arriba"
             }
-            // Abajo
             GlowingRemoteButton(
                 text = "▼",
                 baseColor = Color(0xFF1E293B),
@@ -416,7 +401,6 @@ fun GoogleTvRemoteScreen(
                 btService.sendConsumerUsage(0x0043)
                 actionFeedback = "▼ D-Pad Abajo"
             }
-            // Izquierda
             GlowingRemoteButton(
                 text = "◀",
                 baseColor = Color(0xFF1E293B),
@@ -429,7 +413,6 @@ fun GoogleTvRemoteScreen(
                 btService.sendConsumerUsage(0x0044)
                 actionFeedback = "◀ D-Pad Izquierda"
             }
-            // Derecha
             GlowingRemoteButton(
                 text = "▶",
                 baseColor = Color(0xFF1E293B),
@@ -442,7 +425,6 @@ fun GoogleTvRemoteScreen(
                 btService.sendConsumerUsage(0x0045)
                 actionFeedback = "▶ D-Pad Derecha"
             }
-            // Centro OK
             GlowingRemoteButton(
                 text = "OK",
                 subtitle = "ENTER",
@@ -628,15 +610,15 @@ fun GoogleTvRemoteScreen(
         )
     }
 
-    // ==================== MODAL 2: CONFIGURAR IP ADB DIRECTA Y AGREGAR CUALQUIER APP ====================
+    // ==================== MODAL 2: CONFIGURAR IP DIRECTA Y AGREGAR CUALQUIER APP ====================
     if (showAddAppModal) {
         AlertDialog(
             onDismissRequest = { showAddAppModal = false },
-            title = { Text("⚡ Lanzamiento Directo + Agregar App", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+            title = { Text("⚡ Configurar Lanzador + Agregar App", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "Para abrir Netflix, DGO, Disney+, Prime o XuperTV directo por Package Name (sin pasar por menús), poné la IP de tu Google TV (con Depuración ADB activa):",
+                        "Opcional: Poné la IP de tu Google TV para abrir apps por red local (DIAL/ADB), o dejalo vacío para abrir por casillero del Home vía Bluetooth HID:",
                         fontSize = 11.sp,
                         color = Color(0xFFCBD5E1)
                     )
@@ -649,27 +631,6 @@ fun GoogleTvRemoteScreen(
                         label = { Text("IP de tu Google TV (ej: 192.168.1.50)") },
                         singleLine = true
                     )
-
-                    Button(
-                        onClick = {
-                            feedback.triggerClick(true)
-                            scope.launch {
-                                val res = launcherEngine.scanInstalledTvPackages(tvIp)
-                                res.onSuccess { list ->
-                                    scannedPackages = list
-                                    showScanPackagesModal = true
-                                }.onFailure { err ->
-                                    actionFeedback = "⚠️ ${err.message}"
-                                }
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("🔍 Escanear Todas las Apps Instaladas en el TV", fontSize = 12.sp, color = Color.White)
-                    }
-
-                    Divider(color = Color.DarkGray, modifier = Modifier.padding(vertical = 4.dp))
 
                     Text("Agregar nuevo botón a la grilla:", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     OutlinedTextField(
@@ -687,7 +648,7 @@ fun GoogleTvRemoteScreen(
                     OutlinedTextField(
                         value = newAppSlot,
                         onValueChange = { newAppSlot = it },
-                        label = { Text("Casillero en fila Home (1 = 1ra app, 2 = 2da...)") },
+                        label = { Text("Posición en fila 'Tus Apps' (1 = 1ra, 2 = 2da...)") },
                         singleLine = true
                     )
                 }
@@ -715,48 +676,6 @@ fun GoogleTvRemoteScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showAddAppModal = false }) {
-                    Text("Cerrar")
-                }
-            }
-        )
-    }
-
-    // ==================== MODAL 3: SELECCIONAR CUALQUIER APP ESCANEADA DEL TV ====================
-    if (showScanPackagesModal) {
-        AlertDialog(
-            onDismissRequest = { showScanPackagesModal = false },
-            title = { Text("📦 Apps Detectadas en tu Google TV") },
-            text = {
-                LazyColumn(modifier = Modifier.heightIn(max = 260.dp)) {
-                    items(scannedPackages) { pkg ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    feedback.triggerClick(true)
-                                    val shortName = pkg.substringAfterLast('.').replaceFirstChar { it.uppercase() }
-                                    apps = apps + TvAppShortcut(
-                                        id = "scan_${System.currentTimeMillis()}",
-                                        name = shortName,
-                                        packageName = pkg,
-                                        homeSlotIndex = apps.size,
-                                        colorHex = 0xFF0D9488
-                                    )
-                                    showScanPackagesModal = false
-                                    showAddAppModal = false
-                                    actionFeedback = "✅ Agregada $shortName ($pkg) al control"
-                                }
-                                .padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(pkg, fontSize = 12.sp, color = Color.White)
-                            Text("+ Agregar", fontSize = 12.sp, color = Color(0xFF34D399), fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showScanPackagesModal = false }) {
                     Text("Cerrar")
                 }
             }

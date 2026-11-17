@@ -85,6 +85,7 @@ class BluetoothHidService(private val context: Context) {
         override fun onReceive(ctx: Context?, intent: Intent?) {
             when (intent?.action) {
                 BluetoothDevice.ACTION_FOUND -> {
+                    @Suppress("DEPRECATION")
                     val dev: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     if (dev != null && !dev.name.isNullOrBlank()) {
                         val current = _discoveredDevices.value
@@ -97,6 +98,7 @@ class BluetoothHidService(private val context: Context) {
                     _isScanning.value = false
                 }
                 BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
+                    @Suppress("DEPRECATION")
                     val dev: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     val bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)
                     if (bondState == BluetoothDevice.BOND_BONDED && dev != null) {
@@ -165,10 +167,12 @@ class BluetoothHidService(private val context: Context) {
     }
 
     fun openSystemBluetoothSettings() {
-        val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(intent)
+        try {
+            val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {}
     }
 
     private fun registerHidApp() {
@@ -186,7 +190,7 @@ class BluetoothHidService(private val context: Context) {
         hidDevice?.registerApp(sdp, null, qos, Executors.newCachedThreadPool(), object : BluetoothHidDevice.Callback() {
             override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
                 if (registered) {
-                    _connectionStatus.value = "HID Listo · Elegí tu Google TV en 'Conectar Bluetooth'"
+                    _connectionStatus.value = "HID Listo · Tocá 'Conectar Bluetooth' para elegir tu TV"
                     pluggedDevice?.let { connectToTv(it) }
                 }
             }
@@ -231,34 +235,32 @@ class BluetoothHidService(private val context: Context) {
     }
 
     /**
-     * Navegación por Grillado de Home de Google TV (SIN activar el micrófono de Google Assistant):
-     * 1. Envía AC Home (0x0223) para ir al inicio.
-     * 2. Baja a la fila de 'Tus aplicaciones' y se desplaza hasta la posición (gridIndex) configurada.
-     * 3. Envía Enter (0x0041) para abrir la app directamente.
+     * Lanza cualquier app desde la fila 'Tus aplicaciones' del Home de Google TV vía Bluetooth HID
+     * SIN activar jamás el micrófono de Google Assistant (no usa 0x0221).
      */
     fun launchAppViaHomeGridSlot(slotIndex: Int) {
         scope.launch {
-            // 1. Ir al Home de Google TV
+            // 1. Ir al Home de Google TV (0x0223 AC Home)
             sendConsumerUsage(0x0223)
             delay(650)
-            // 2. Bajar a la fila de aplicaciones favoritas
+            // 2. Bajar a la fila 'Tus aplicaciones'
             sendConsumerUsage(0x0043) // DPAD_DOWN
-            delay(260)
-            sendConsumerUsage(0x0043) // DPAD_DOWN (fila Tus Apps en Google TV)
-            delay(260)
-            // Ir al primer ícono a la izquierda para tener referencia fija
+            delay(250)
+            sendConsumerUsage(0x0043) // DPAD_DOWN
+            delay(250)
+            // 3. Alinear al primer casillero a la izquierda
             repeat(8) {
                 sendConsumerUsage(0x0044) // DPAD_LEFT
-                delay(70)
+                delay(65)
             }
-            delay(150)
-            // Mover a la derecha según el número de casillero (0 = primera app, 1 = segunda, etc.)
+            delay(140)
+            // 4. Desplazar hasta el casillero de la app elegida (0 = 1ra app, 1 = 2da, etc.)
             repeat(slotIndex.coerceAtLeast(0)) {
                 sendConsumerUsage(0x0045) // DPAD_RIGHT
-                delay(140)
+                delay(130)
             }
-            delay(180)
-            // 3. Abrir la aplicación (OK / Menu Pick)
+            delay(170)
+            // 5. Seleccionar (OK = 0x0041)
             sendConsumerUsage(0x0041)
         }
     }
